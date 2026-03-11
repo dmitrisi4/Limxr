@@ -136,6 +136,52 @@
     cube.position.set(.7,1.45,-1.5);
     scene.add(cube);
 
+    // ---------- MOVEMENT / LOCOMOTION ----------
+    // Простое движение стиком контроллера (smooth locomotion)
+
+    const player = new THREE.Group();
+    player.position.set(0,0,0);
+    player.add(camera);
+    scene.add(player);
+
+    // Добавляем контроллеры в группу игрока, чтобы они перемещались вместе с ним
+    player.add(renderer.xr.getController(0));
+    player.add(renderer.xr.getController(1));
+
+    const tempMatrix = new THREE.Matrix4();
+    const velocity = new THREE.Vector3();
+
+    function handleController(controller, dt){
+      const session = renderer.xr.getSession();
+      if(!session) return;
+
+      const inputSources = session.inputSources;
+
+      for(const source of inputSources){
+        if(!source.gamepad) continue;
+
+        const axes = source.gamepad.axes;
+        if(axes.length < 2) continue;
+
+        const x = axes[2] ?? axes[0];
+        const y = axes[3] ?? axes[1];
+
+        const dead = 0.15;
+        const speed = 2.0;
+
+        if(Math.abs(x) < dead && Math.abs(y) < dead) continue;
+
+        tempMatrix.identity().extractRotation(controller.matrixWorld);
+
+        const dir = new THREE.Vector3(x, 0, y);
+        dir.applyMatrix4(tempMatrix);
+        dir.y = 0;
+        dir.normalize();
+
+        velocity.addScaledVector(dir, speed * dt);
+      }
+    }
+
     // ---------- XR CHECK ----------
     async function checkXR(){
       const lines=[];
@@ -189,14 +235,23 @@
     };
 
     // ---------- LOOP ----------
-    const clock=new THREE.Clock();
-    renderer.setAnimationLoop(()=>{
-      const t=clock.getElapsedTime();
-      cube.rotation.x=t*.8;
-      cube.rotation.y=t*1.1;
-      square.rotation.z=Math.sin(t*1.5)*.35;
-      hello.position.y=1.8+Math.sin(t*1.2)*.03;
-      renderer.render(scene,camera);
+    const clock = new THREE.Clock();
+    renderer.setAnimationLoop(() => {
+      const dt = clock.getDelta();
+      const t = clock.elapsedTime;
+
+      cube.rotation.x = t * .8;
+      cube.rotation.y = t * 1.1;
+      square.rotation.z = Math.sin(t * 1.5) * .35;
+      hello.position.y = 1.8 + Math.sin(t * 1.2) * .03;
+
+      const controller = renderer.xr.getController(0);
+      handleController(controller, dt);
+
+      player.position.add(velocity);
+      velocity.multiplyScalar(0.85);
+
+      renderer.render(scene, camera);
     });
 
     addEventListener('resize',()=>{
