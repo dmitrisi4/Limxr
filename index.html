@@ -57,8 +57,10 @@
 <body>
   <div id="overlay">
     <div><strong>WebXR demo</strong></div>
-    <div>Hello World + квадрат + куб</div>
+    <div>Hello World + квадрат + куб + захват предметов</div>
     <div style="margin-top:6px">Открывать в <b>Meta Quest Browser</b></div>
+    <div style="margin-top:6px">Подойдите к кубу/квадрату и нажмите trigger/squeeze, чтобы взять.</div>
+    <div style="margin-top:6px">Теперь отображаются лучи, контроллеры и (если доступно) руки.</div>
     <div id="status">Проверка WebXR...</div>
   </div>
 
@@ -68,6 +70,8 @@
   <script type="module">
     // ВАЖНО: используем версию three со встроенными зависимостями
     import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js';
+    import { XRControllerModelFactory } from 'https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/webxr/XRControllerModelFactory.js';
+    import { XRHandModelFactory } from 'https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/webxr/XRHandModelFactory.js';
 
     const statusEl = document.getElementById('status');
     const enterVrBtn = document.getElementById('enterVrBtn');
@@ -136,6 +140,110 @@
     cube.position.set(.7,1.45,-1.5);
     scene.add(cube);
 
+    const grabbables = [cube, square];
+
+    // ---------- CONTROLLERS / HANDS ----------
+    const controllerModelFactory = new XRControllerModelFactory();
+    const handModelFactory = new XRHandModelFactory();
+
+    function makeControllerRay(){
+      const points = [new THREE.Vector3(0,0,0), new THREE.Vector3(0,0,-1)];
+      const geometry = new THREE.BufferGeometry().setFromPoints(points);
+      const material = new THREE.LineBasicMaterial({ color: 0x93c5fd });
+      const ray = new THREE.Line(geometry, material);
+      ray.name = 'ray';
+      ray.scale.z = 1.2;
+      return ray;
+    }
+
+    function setupController(index){
+      const controller = renderer.xr.getController(index);
+      controller.userData.inputSource = null;
+      controller.add(makeControllerRay());
+      controller.addEventListener('connected', (event) => {
+        controller.userData.inputSource = event.data;
+      });
+      controller.addEventListener('disconnected', () => {
+        controller.userData.inputSource = null;
+      });
+
+      const grip = renderer.xr.getControllerGrip(index);
+      grip.add(controllerModelFactory.createControllerModel(grip));
+
+      const hand = renderer.xr.getHand(index);
+      hand.add(handModelFactory.createHandModel(hand, 'mesh'));
+
+      return { controller, grip, hand };
+    }
+
+    const xr0 = setupController(0);
+    const xr1 = setupController(1);
+
+    // ---------- GRAB ----------
+    const controller0 = xr0.controller;
+    const controller1 = xr1.controller;
+    const grabState = [
+      { heldObject: null, wasPressed: false },
+      { heldObject: null, wasPressed: false }
+    ];
+    const MAX_GRAB_DISTANCE = 0.35;
+    const tempControllerPos = new THREE.Vector3();
+    const tempObjectPos = new THREE.Vector3();
+
+    function isGrabPressed(source){
+      if(!source?.gamepad?.buttons) return false;
+
+      // Поддержка разных схем: trigger, squeeze и fallback на первый доступный action-кнопки.
+      const buttons = source.gamepad.buttons;
+      const candidateIndexes = [0, 1, 4, 5];
+      for(const index of candidateIndexes){
+        const button = buttons[index];
+        if(button && (button.pressed || button.value > 0.65)) return true;
+      }
+
+      return false;
+    }
+
+    function findClosestGrabbable(controller){
+      controller.getWorldPosition(tempControllerPos);
+
+      let closest = null;
+      let minDistance = Infinity;
+
+      for(const object of grabbables){
+        object.getWorldPosition(tempObjectPos);
+        const distance = tempControllerPos.distanceTo(tempObjectPos);
+
+        if(distance < MAX_GRAB_DISTANCE && distance < minDistance){
+          closest = object;
+          minDistance = distance;
+        }
+      }
+
+      return closest;
+    }
+
+    function tryToggleGrab(controller, state, source){
+      const pressed = isGrabPressed(source);
+
+      if(pressed && !state.wasPressed){
+        if(state.heldObject){
+          state.heldObject.material.emissive?.setHex(0x000000);
+          scene.attach(state.heldObject);
+          state.heldObject = null;
+        } else {
+          const target = findClosestGrabbable(controller);
+          if(target){
+            target.material.emissive?.setHex(0x1f2937);
+            controller.attach(target);
+            state.heldObject = target;
+          }
+        }
+      }
+
+      state.wasPressed = pressed;
+    }
+
     // ---------- MOVEMENT / LOCOMOTION ----------
     // Простое движение стиком контроллера (smooth locomotion)
 
@@ -144,42 +252,42 @@
     player.add(camera);
     scene.add(player);
 
-    // Добавляем контроллеры в группу игрока, чтобы они перемещались вместе с ним
-    player.add(renderer.xr.getController(0));
-    player.add(renderer.xr.getController(1));
+    // Добавляем контроллеры/модели в группу игрока, чтобы они перемещались вместе с ним
+    player.add(controller0);
+    player.add(controller1);
+    player.add(xr0.grip);
+    player.add(xr1.grip);
+    player.add(xr0.hand);
+    player.add(xr1.hand);
 
     const tempMatrix = new THREE.Matrix4();
     const velocity = new THREE.Vector3();
 
-    function handleController(controller, dt){
+    function handleController(controller, source, dt){
       const session = renderer.xr.getSession();
       if(!session) return;
 
-      const inputSources = session.inputSources;
+      if(!source?.gamepad) return;
 
-      for(const source of inputSources){
-        if(!source.gamepad) continue;
+      const axes = source.gamepad.axes;
+      if(axes.length < 2) return;
 
-        const axes = source.gamepad.axes;
-        if(axes.length < 2) continue;
+      const x = axes[2] ?? axes[0];
+      const y = axes[3] ?? axes[1];
 
-        const x = axes[2] ?? axes[0];
-        const y = axes[3] ?? axes[1];
+      const dead = 0.15;
+      const speed = 2.0;
 
-        const dead = 0.15;
-        const speed = 2.0;
+      if(Math.abs(x) < dead && Math.abs(y) < dead) return;
 
-        if(Math.abs(x) < dead && Math.abs(y) < dead) continue;
+      tempMatrix.identity().extractRotation(controller.matrixWorld);
 
-        tempMatrix.identity().extractRotation(controller.matrixWorld);
+      const dir = new THREE.Vector3(x, 0, y);
+      dir.applyMatrix4(tempMatrix);
+      dir.y = 0;
+      dir.normalize();
 
-        const dir = new THREE.Vector3(x, 0, y);
-        dir.applyMatrix4(tempMatrix);
-        dir.y = 0;
-        dir.normalize();
-
-        velocity.addScaledVector(dir, speed * dt);
-      }
+      velocity.addScaledVector(dir, speed * dt);
     }
 
     // ---------- XR CHECK ----------
@@ -221,7 +329,7 @@
     enterVrBtn.onclick = async ()=>{
       try{
         const session = await navigator.xr.requestSession('immersive-vr',{
-          optionalFeatures:['local-floor','bounded-floor']
+          optionalFeatures:['local-floor','bounded-floor','hand-tracking']
         });
         renderer.xr.setReferenceSpaceType('local-floor');
         await renderer.xr.setSession(session);
@@ -245,8 +353,15 @@
       square.rotation.z = Math.sin(t * 1.5) * .35;
       hello.position.y = 1.8 + Math.sin(t * 1.2) * .03;
 
-      const controller = renderer.xr.getController(0);
-      handleController(controller, dt);
+      const session = renderer.xr.getSession();
+      if(session){
+        const source0 = controller0.userData.inputSource;
+        const source1 = controller1.userData.inputSource;
+
+        handleController(controller0, source0, dt);
+        tryToggleGrab(controller0, grabState[0], source0);
+        tryToggleGrab(controller1, grabState[1], source1);
+      }
 
       player.position.add(velocity);
       velocity.multiplyScalar(0.85);
