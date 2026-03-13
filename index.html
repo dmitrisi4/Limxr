@@ -59,7 +59,7 @@
     <div><strong>WebXR demo</strong></div>
     <div>Hello World + квадрат + куб + захват предметов</div>
     <div style="margin-top:6px">Открывать в <b>Meta Quest Browser</b></div>
-    <div style="margin-top:6px">Подойдите к кубу/квадрату и нажмите trigger/squeeze, чтобы взять.</div>
+    <div style="margin-top:6px">Подойдите к кубу/квадрату и нажмите trigger/squeeze, чтобы взять. В VR видны руки и модели контроллеров.</div>
     <div id="status">Проверка WebXR...</div>
   </div>
 
@@ -68,7 +68,9 @@
 
   <script type="module">
     // ВАЖНО: используем версию three со встроенными зависимостями
-    import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js';
+    import * as THREE from 'https://unpkg.com/three@0.160.0/build/three.module.js?module';
+    import { XRControllerModelFactory } from 'https://unpkg.com/three@0.160.0/examples/jsm/webxr/XRControllerModelFactory.js?module';
+    import { XRHandModelFactory } from 'https://unpkg.com/three@0.160.0/examples/jsm/webxr/XRHandModelFactory.js?module';
 
     const statusEl = document.getElementById('status');
     const enterVrBtn = document.getElementById('enterVrBtn');
@@ -139,13 +141,29 @@
 
     const grabbables = [cube, square];
 
-    // ---------- GRAB ----------
-    const controller0 = renderer.xr.getController(0);
-    const controller1 = renderer.xr.getController(1);
-    const grabState = [
-      { heldObject: null, wasPressed: false },
-      { heldObject: null, wasPressed: false }
-    ];
+    // ---------- CONTROLLERS / HANDS ----------
+    const controllerModelFactory = new XRControllerModelFactory();
+    const handModelFactory = new XRHandModelFactory();
+
+    function createControllerRig(index){
+      const controller = renderer.xr.getController(index);
+      const grip = renderer.xr.getControllerGrip(index);
+      grip.add(controllerModelFactory.createControllerModel(grip));
+
+      const hand = renderer.xr.getHand(index);
+      hand.add(handModelFactory.createHandModel(hand, 'mesh'));
+
+      return { controller, grip, hand };
+    }
+
+    const leftRig = createControllerRig(0);
+    const rightRig = createControllerRig(1);
+
+    const grabState = {
+      left: { heldObject: null, wasPressed: false },
+      right: { heldObject: null, wasPressed: false }
+    };
+
     const MAX_GRAB_DISTANCE = 0.35;
     const tempControllerPos = new THREE.Vector3();
     const tempObjectPos = new THREE.Vector3();
@@ -212,9 +230,9 @@
     player.add(camera);
     scene.add(player);
 
-    // Добавляем контроллеры в группу игрока, чтобы они перемещались вместе с ним
-    player.add(controller0);
-    player.add(controller1);
+    // Добавляем контроллеры и руки в группу игрока, чтобы они перемещались вместе с ним
+    player.add(leftRig.controller, leftRig.grip, leftRig.hand);
+    player.add(rightRig.controller, rightRig.grip, rightRig.hand);
 
     const tempMatrix = new THREE.Matrix4();
     const velocity = new THREE.Vector3();
@@ -244,6 +262,12 @@
       dir.normalize();
 
       velocity.addScaledVector(dir, speed * dt);
+    }
+
+
+
+    function getSourceByHand(session, handedness){
+      return session.inputSources.find((source) => source.handedness === handedness) || null;
     }
 
     // ---------- XR CHECK ----------
@@ -285,7 +309,7 @@
     enterVrBtn.onclick = async ()=>{
       try{
         const session = await navigator.xr.requestSession('immersive-vr',{
-          optionalFeatures:['local-floor','bounded-floor']
+          optionalFeatures:['local-floor','bounded-floor','hand-tracking']
         });
         renderer.xr.setReferenceSpaceType('local-floor');
         await renderer.xr.setSession(session);
@@ -311,14 +335,12 @@
 
       const session = renderer.xr.getSession();
       if(session){
-        const inputSources = session.inputSources;
+        const leftSource = getSourceByHand(session, 'left');
+        const rightSource = getSourceByHand(session, 'right');
 
-        const source0 = inputSources[0];
-        const source1 = inputSources[1];
-
-        handleController(controller0, source0, dt);
-        tryToggleGrab(controller0, grabState[0], source0);
-        tryToggleGrab(controller1, grabState[1], source1);
+        handleController(leftRig.controller, leftSource, dt);
+        tryToggleGrab(leftRig.controller, grabState.left, leftSource);
+        tryToggleGrab(rightRig.controller, grabState.right, rightSource);
       }
 
       player.position.add(velocity);
