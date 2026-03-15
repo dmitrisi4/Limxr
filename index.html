@@ -151,7 +151,10 @@
       grip.add(controllerModelFactory.createControllerModel(grip));
 
       const hand = renderer.xr.getHand(index);
-      hand.add(handModelFactory.createHandModel(hand, 'mesh'));
+      hand.add(handModelFactory.createHandModel(hand, 'spheres'));
+
+      grip.visible = false;
+      hand.visible = false;
 
       return { controller, grip, hand };
     }
@@ -270,6 +273,29 @@
       return session.inputSources.find((source) => source.handedness === handedness) || null;
     }
 
+
+    function updateRigVisibility(session){
+      const leftSource = getSourceByHand(session, 'left');
+      const rightSource = getSourceByHand(session, 'right');
+
+      leftRig.grip.visible = !!leftSource?.gamepad;
+      rightRig.grip.visible = !!rightSource?.gamepad;
+
+      leftRig.hand.visible = !!leftSource?.hand;
+      rightRig.hand.visible = !!rightSource?.hand;
+    }
+
+
+    function getLocomotionInput(session){
+      const leftSource = getSourceByHand(session, 'left');
+      if(leftSource?.gamepad) return { controller: leftRig.controller, source: leftSource };
+
+      const rightSource = getSourceByHand(session, 'right');
+      if(rightSource?.gamepad) return { controller: rightRig.controller, source: rightSource };
+
+      return null;
+    }
+
     // ---------- XR CHECK ----------
     async function checkXR(){
       const lines=[];
@@ -338,9 +364,20 @@
         const leftSource = getSourceByHand(session, 'left');
         const rightSource = getSourceByHand(session, 'right');
 
-        handleController(leftRig.controller, leftSource, dt);
+        updateRigVisibility(session);
+
+        const locomotionInput = getLocomotionInput(session);
+        if(locomotionInput){
+          handleController(locomotionInput.controller, locomotionInput.source, dt);
+        }
+
         tryToggleGrab(leftRig.controller, grabState.left, leftSource);
         tryToggleGrab(rightRig.controller, grabState.right, rightSource);
+      } else {
+        leftRig.grip.visible = false;
+        rightRig.grip.visible = false;
+        leftRig.hand.visible = false;
+        rightRig.hand.visible = false;
       }
 
       player.position.add(velocity);
